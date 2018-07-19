@@ -17,7 +17,7 @@ import (
 
 const (
 	defaultDataDir = "/tmp/raft"
-	raftState      = "raft/"
+	raftState      = "state/"
 	// raftLogCacheSize is the maximum number of logs to cache in-memory.
 	// This is used to reduce disk I/O for the recently committed entries.
 	raftLogCacheSize  = 512
@@ -39,20 +39,27 @@ type RaftServer struct {
 	leaderAcl     string
 	leaderAclLock sync.Mutex
 
+	leaderNotify  chan<- bool
+	shutdowNotify chan<- bool
+
 	shutdownCh chan struct{}
 	shutdown   bool
 }
 
-func NewRaftServer(logger *log.Logger, config *config.ServerConfiguration) (*RaftServer, error) {
+func NewRaftServer(logger *log.Logger, config *config.ServerConfiguration,
+	leaderNotify chan<- bool, shutdownNotify chan<- bool) (*RaftServer, error) {
+
 	s := &RaftServer{
-		logger: logger,
-		config: config,
+		logger:        logger,
+		config:        config,
+		leaderNotify:  leaderNotify,
+		shutdowNotify: shutdownNotify,
 	}
 	if s.config.DataDir == "" {
 		s.config.DataDir = defaultDataDir
 	}
 
-	err := s.SetupRaft()
+	err := s.setupRaft()
 	if err != nil {
 		return nil, err
 	}
@@ -61,8 +68,6 @@ func NewRaftServer(logger *log.Logger, config *config.ServerConfiguration) (*Raf
 }
 
 func (s *RaftServer) Join(node *Node, voter bool) error {
-
-	fmt.Println("join ", node.ID, node.Addr)
 
 	serverID := raft.ServerID(node.ID)
 	address := raft.ServerAddress(node.Addr)
@@ -126,14 +131,14 @@ func (s *RaftServer) initRaftConfig() {
 	}
 }
 
-func (s *RaftServer) SetupRaft() error {
+func (s *RaftServer) setupRaft() error {
 
 	s.initRaftConfig()
 	// If we have an unclean exit then attempt to close the Raft store.
 	defer func() {
 		if s.raft == nil && s.raftStore != nil {
 			if err := s.raftStore.Close(); err != nil {
-				s.logger.Printf("[ERR] nomad: failed to close Raft store: %v", err)
+				s.logger.Printf("[ERR] raftd: failed to close Raft store: %v", err)
 			}
 		}
 	}()
@@ -146,7 +151,7 @@ func (s *RaftServer) SetupRaft() error {
 	var err error
 	s.fsm, err = NewFSM(dataDir)
 	if err != nil {
-		return fmt.Errorf("Failed to init FSM. error: %s", err.Error())
+		return fmt.Errorf("Failed to init FSM. dir: %s, error: %s", dataDir, err.Error())
 	}
 
 	addr, err := net.ResolveTCPAddr("tcp", s.config.RaftAddr)
@@ -223,10 +228,10 @@ func (s *RaftServer) SetupRaft() error {
 				if err := os.Remove(peersFile); err != nil {
 					return fmt.Errorf("failed to delete peers.json, please delete manually (see peers.info for details): %v", err)
 				}
-				s.logger.Printf("[INFO] nomad: deleted peers.json file (see peers.info for details)")
+				s.logger.Printf("[INFO] raftd: deleted peers.json file (see peers.info for details)")
 			}
 		} else if _, err := os.Stat(peersFile); err == nil {
-			s.logger.Printf("[INFO] nomad: found peers.json file, recovering Raft configuration...")
+			s.logger.Printf("[INFO] raftd: found peers.json file, recovering Raft configuration...")
 			configuration, err := raft.ReadPeersJSON(peersFile)
 			if err != nil {
 				return fmt.Errorf("recovery failed to parse peers.json: %v", err)
@@ -243,7 +248,7 @@ func (s *RaftServer) SetupRaft() error {
 			if err := os.Remove(peersFile); err != nil {
 				return fmt.Errorf("recovery failed to delete peers.json, please delete manually (see peers.info for details): %v", err)
 			}
-			s.logger.Printf("[INFO] nomad: deleted peers.json file after successful recovery")
+			s.logger.Printf("[INFO] raftd: deleted peers.json file after successful recovery")
 		}
 	}
 

@@ -6,7 +6,6 @@ import (
 	"io"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/boltdb/bolt"
 	"github.com/hashicorp/raft"
@@ -27,8 +26,9 @@ type SimpleFSM struct {
 
 func NewFSM(dataDir string) (*SimpleFSM, error) {
 	// Create the BoltDB backend
-	db, err := bolt.Open(filepath.Join(dataDir, "fsm.db"), 0600, &bolt.Options{Timeout: 3 * time.Second})
+	db, err := bolt.Open(filepath.Join(dataDir, "fsm.db"), 0600, nil)
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 	tx, err := db.Begin(true)

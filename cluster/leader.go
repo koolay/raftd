@@ -29,9 +29,13 @@ func (s *RaftServer) monitorLeadership() {
 			switch {
 			case isLeader:
 				if weAreLeaderCh != nil {
-					s.logger.Printf("[ERR] nomad: attempted to start the leader loop while running")
+					s.logger.Println("[ERR] raftd: attempted to start the leader loop while running")
 					continue
 				}
+
+				go func() {
+					s.leaderNotify <- isLeader
+				}()
 
 				weAreLeaderCh = make(chan struct{})
 				leaderLoop.Add(1)
@@ -39,22 +43,26 @@ func (s *RaftServer) monitorLeadership() {
 					defer leaderLoop.Done()
 					s.leaderLoop(ch)
 				}(weAreLeaderCh)
-				s.logger.Printf("[INFO] nomad: cluster leadership acquired")
+				s.logger.Println("[INFO] raftd: cluster leadership acquired")
 
 			default:
 				if weAreLeaderCh == nil {
-					s.logger.Printf("[ERR] nomad: attempted to stop the leader loop while not running")
+					s.logger.Println("[ERR] raftd: attempted to stop the leader loop while not running")
 					continue
 				}
 
-				s.logger.Printf("[DEBUG] nomad: shutting down leader loop")
+				s.logger.Println("[DEBUG] raftd: shutting down leader loop")
 				close(weAreLeaderCh)
 				leaderLoop.Wait()
 				weAreLeaderCh = nil
-				s.logger.Printf("[INFO] nomad: cluster leadership lost")
+				s.logger.Println("[INFO] raftd: cluster leadership lost")
 			}
 
 		case <-s.shutdownCh:
+			go func() {
+				s.shutdowNotify <- true
+			}()
+			s.logger.Println("[INFO] raftd: shut down")
 			return
 		}
 	}
@@ -72,19 +80,19 @@ RECONCILE:
 	// Apply a raft barrier to ensure our FSM is caught up
 	barrier := s.raft.Barrier(barrierWriteTimeout)
 	if err := barrier.Error(); err != nil {
-		s.logger.Printf("[ERR] nomad: failed to wait for barrier: %v", err)
+		s.logger.Printf("[ERR] raftd: failed to wait for barrier: %v", err)
 		goto WAIT
 	}
 
 	// Check if we need to handle initial leadership actions
 	if !establishedLeader {
 		if err := s.establishLeadership(stopCh); err != nil {
-			s.logger.Printf("[ERR] nomad: failed to establish leadership: %v", err)
+			s.logger.Printf("[ERR] raftd: failed to establish leadership: %v", err)
 
 			// Immediately revoke leadership since we didn't successfully
 			// establish leadership.
 			if err := s.revokeLeadership(); err != nil {
-				s.logger.Printf("[ERR] nomad: failed to revoke leadership: %v", err)
+				s.logger.Printf("[ERR] raftd: failed to revoke leadership: %v", err)
 			}
 
 			goto WAIT
@@ -93,7 +101,7 @@ RECONCILE:
 		establishedLeader = true
 		defer func() {
 			if err := s.revokeLeadership(); err != nil {
-				s.logger.Printf("[ERR] nomad: failed to revoke leadership: %v", err)
+				s.logger.Printf("[ERR] raftd: failed to revoke leadership: %v", err)
 			}
 		}()
 	}

@@ -59,6 +59,7 @@ func main() {
 			panic(err)
 		}
 		go func() {
+			// Only leader can join others
 			er := s.Join(&cluster.Node{
 				ID:   joinID,
 				Addr: join,
@@ -78,7 +79,7 @@ func main() {
 	for {
 		select {
 		case <-tc.C:
-			fmt.Println("I'm leader. ", s.GetLeader(), s.IsLeader())
+			fmt.Printf("The leader is %s. I am the leader? %v \n", s.GetLeader(), s.IsLeader())
 		case <-sigCh:
 			fmt.Println("quit")
 			os.Exit(1)
